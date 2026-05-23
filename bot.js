@@ -15,7 +15,6 @@ const ITEMS = [
   { name: "Snape's Advanced Potion Book",       price: 50  },
 ];
 
-// Build the /order slash command with one integer option per item
 const commandBuilder = new SlashCommandBuilder()
   .setName('order')
   .setDescription('Calculate the total for a potion order');
@@ -37,11 +36,16 @@ ITEMS.forEach(item => {
 
 commandBuilder.addBooleanOption(opt =>
   opt.setName('discount')
-     .setDescription('Apply 15% discount?')
+     .setDescription('Apply 15% loyalty discount?')
      .setRequired(false)
 );
 
-// Register commands on startup
+commandBuilder.addBooleanOption(opt =>
+  opt.setName('clearance_sale')
+     .setDescription('Apply 25% clearance sale discount?')
+     .setRequired(false)
+);
+
 async function registerCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
   try {
@@ -66,6 +70,7 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'order') return;
 
   const applyDiscount = interaction.options.getBoolean('discount') ?? false;
+  const applyClearance = interaction.options.getBoolean('clearance_sale') ?? false;
   const lineItems = [];
   let subtotal = 0;
 
@@ -89,12 +94,25 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  const discountAmt = applyDiscount ? Math.round(subtotal * 0.15 * 100) / 100 : 0;
+  let discountPct = 0;
+  let discountLabel = '';
+  if (applyDiscount && applyClearance) {
+    discountPct = 0.25;
+    discountLabel = '25% clearance sale (best discount applied)';
+  } else if (applyClearance) {
+    discountPct = 0.25;
+    discountLabel = '25% clearance sale';
+  } else if (applyDiscount) {
+    discountPct = 0.15;
+    discountLabel = '15% loyalty discount';
+  }
+
+  const discountAmt = Math.round(subtotal * discountPct * 100) / 100;
   const total = subtotal - discountAmt;
 
   const embed = new EmbedBuilder()
     .setTitle('🧪 Potion Order Summary')
-    .setColor(0x5865F2)
+    .setColor(applyClearance ? 0xF1C40F : 0x5865F2)
     .addFields(
       lineItems.map(l => ({
         name: l.name,
@@ -104,15 +122,15 @@ client.on('interactionCreate', async interaction => {
     )
     .addFields({ name: '\u200b', value: '─────────────────', inline: false });
 
-  if (applyDiscount) {
+  if (discountPct > 0) {
     embed.addFields(
       { name: 'Subtotal', value: `${subtotal} Galleons`, inline: true },
-      { name: 'Discount (15%)', value: `−${discountAmt} Galleons`, inline: true },
+      { name: `Discount (${discountPct * 100}%)`, value: `−${discountAmt} Galleons`, inline: true },
     );
   }
 
   embed.addFields({ name: '💰 Total', value: `**${total} Galleons**`, inline: false })
-    .setFooter({ text: applyDiscount ? '15% discount applied' : 'No discount applied' })
+    .setFooter({ text: discountPct > 0 ? `${discountLabel} applied` : 'No discount applied' })
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
