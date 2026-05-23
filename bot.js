@@ -1,5 +1,7 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
+const ALLOWED_ROLES = ['Manager', 'Owner'];
+
 const ITEMS = [
   { name: "Animagus Potion",                    price: 25  },
   { name: "Polyjuice Potion",                   price: 5   },
@@ -68,6 +70,14 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'order') return;
+
+  const memberRoles = interaction.member.roles.cache;
+  const hasPermission = memberRoles.some(role => ALLOWED_ROLES.includes(role.name));
+
+  if (!hasPermission) {
+    await interaction.reply({ content: '❌ You do not have permission to use this command. Only **Manager** and **Owner** roles can place orders.', ephemeral: true });
+    return;
+  }
 
   const applyDiscount = interaction.options.getBoolean('discount') ?? false;
   const applyClearance = interaction.options.getBoolean('clearance_sale') ?? false;
