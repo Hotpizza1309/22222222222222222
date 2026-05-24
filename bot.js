@@ -2,9 +2,11 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuild
 const { Pool } = require('pg');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const ALLOWED_ROLES = ['Manager', 'Owner'];
-const LOG_ROLES     = ['Owner'];
-const LOG_CHANNEL   = 'person-log';
+const ALLOWED_ROLES   = ['Manager', 'Owner'];
+const LOG_ROLES       = ['Owner'];
+const LOG_CHANNEL     = 'person-log';
+const INV_CHANNEL     = '📰┋inventory-log';
+const LOW_STOCK_LIMIT = 10;
 
 const REWARDS = [
   { label: '🔥 Grand Potion Lord',  role: '🔥 Grand Potion Lord',  threshold: 500 },
@@ -13,6 +15,14 @@ const REWARDS = [
   { label: '⚜️ Trusted Alchemist', role: '⚜️ Trusted Alchemist', threshold: 50  },
   { label: '📜 Certified Patron',   role: '📜 Certified Patron',   threshold: 30  },
   { label: 'Verified Customer💕',   role: 'Verified Customer💕',   threshold: 1   },
+];
+
+const ADVANCED_POTIONS = [
+  "Animagus Potion",
+  "Polyjuice Potion",
+  "Death Potion",
+  "Exploding Potion",
+  "Snape's Advanced Potion Book",
 ];
 
 const ITEMS = [
@@ -43,6 +53,26 @@ async function initDB() {
       total INTEGER NOT NULL DEFAULT 0
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory (
+      item_name TEXT PRIMARY KEY,
+      quantity INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_message (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      message_id TEXT,
+      channel_id TEXT
+    )
+  `);
+  // Seed inventory with 0 for any missing items
+  for (const item of ITEMS) {
+    await pool.query(`
+      INSERT INTO inventory (item_name, quantity) VALUES ($1, 0)
+      ON CONFLICT (item_name) DO NOTHING
+    `, [item.name]);
+  }
   console.log('Database ready.');
 }
 
@@ -63,6 +93,30 @@ async function getAllCounts() {
   return res.rows;
 }
 
+async function getInventory() {
+  const res = await pool.query('SELECT item_name, quantity FROM inventory');
+  return res.rows;
+}
+
+async function setInventoryItem(itemName, quantity) {
+  await pool.query(`
+    INSERT INTO inventory (item_name, quantity) VALUES ($1, $2)
+    ON CONFLICT (item_name) DO UPDATE SET quantity = $2
+  `, [itemName, quantity]);
+}
+
+async function getSavedMessage() {
+  const res = await pool.query('SELECT message_id, channel_id FROM inventory_message WHERE id = 1');
+  return res.rows[0] ?? null;
+}
+
+async function saveMessageRef(messageId, channelId) {
+  await pool.query(`
+    INSERT INTO inventory_message (id, message_id, channel_id) VALUES (1, $1, $2)
+    ON CONFLICT (id) DO UPDATE SET message_id = $1, channel_id = $2
+  `, [messageId, channelId]);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function hasAllowedRole(member) {
   return member.roles.cache.some(r => ALLOWED_ROLES.includes(r.name));
@@ -74,6 +128,63 @@ function hasLogRole(member) {
 
 function getTierForCount(count) {
   return REWARDS.find(r => count >= r.threshold) ?? null;
+}
+
+function stockLabel(qty) {
+  if (qty === 0)              return '🔴 {Out of Stock}';
+  if (qty < LOW_STOCK_LIMIT)  return '🟡 {Low Stock}';
+  return '🟢 {In Stock}';
+}
+
+function buildInventoryText(rows) {
+  const map = {};
+  rows.forEach(r => { map[r.item_name] = r.quantity; });
+
+  const advanced = ITEMS.filter(i => ADVANCED_POTIONS.includes(i.name));
+  const regular  = ITEMS.filter(i => !ADVANCED_POTIONS.includes(i.name));
+
+  const fmt = (item) => {
+    const qty = map[item.name] ?? 0;
+    return `• ${item.name} — x${qty} — ${stockLabel(qty)}`;
+  };
+
+  return [
+    '```',
+    'OFFICE OF EXPERIMENTAL ELIXIRS',
+    '════════════════════',
+    '⚗️  ADVANCED POTIONS',
+    '════════════════════',
+    ...advanced.map(fmt),
+    '═══════════════════',
+    '🧪  REGULAR POTIONS',
+    '═══════════════════',
+    ...regular.map(fmt),
+    '```',
+    `*Last updated: <t:${Math.floor(Date.now() / 1000)}:R>*`,
+  ].join('\n');
+}
+
+async function updateInventoryMessage(guild) {
+  const invChannel = guild.channels.cache.find(c => c.name === INV_CHANNEL);
+  if (!invChannel) return;
+
+  const rows    = await getInventory();
+  const content = buildInventoryText(rows);
+  const saved   = await getSavedMessage();
+
+  if (saved) {
+    try {
+      const ch  = await guild.channels.fetch(saved.channel_id);
+      const msg = await ch.messages.fetch(saved.message_id);
+      await msg.edit(content);
+      return;
+    } catch {
+      // Message was deleted, send a new one
+    }
+  }
+
+  const newMsg = await invChannel.send(content);
+  await saveMessageRef(newMsg.id, invChannel.id);
 }
 
 // ── Slash command definitions ─────────────────────────────────────────────────
@@ -115,6 +226,17 @@ const restoreCommand = new SlashCommandBuilder()
   .addUserOption(opt => opt.setName('customer').setDescription('The customer to restore').setRequired(true))
   .addIntegerOption(opt => opt.setName('total').setDescription('Their total potion count from the logs').setMinValue(1).setRequired(true));
 
+// Build /updateinventory with one option per item
+const updateInvCommand = new SlashCommandBuilder()
+  .setName('updateinventory')
+  .setDescription('Update the stock quantity for a potion');
+ITEMS.forEach(item => {
+  const optionName = item.name.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,32);
+  updateInvCommand.addIntegerOption(opt =>
+    opt.setName(optionName).setDescription(`Set stock for ${item.name}`).setMinValue(0).setRequired(false)
+  );
+});
+
 // ── Register commands ─────────────────────────────────────────────────────────
 async function registerCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -128,6 +250,7 @@ async function registerCommands(clientId, token) {
         leaderboardCommand.toJSON(),
         helpCommand.toJSON(),
         restoreCommand.toJSON(),
+        updateInvCommand.toJSON(),
       ]
     });
     console.log('Slash commands registered.');
@@ -151,152 +274,104 @@ client.on('interactionCreate', async interaction => {
     if (!hasAllowedRole(interaction.member)) {
       return interaction.reply({ content: '❌ Only **Manager** and **Owner** roles can use this command.', ephemeral: true });
     }
-
     const applyDiscount  = interaction.options.getBoolean('discount') ?? false;
     const applyClearance = interaction.options.getBoolean('clearance_sale') ?? false;
     const lineItems = [];
     let subtotal = 0;
-
     ITEMS.forEach(item => {
       const optionName = item.name.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,32);
       const qty = interaction.options.getInteger(optionName) ?? 0;
-      if (qty > 0) {
-        const cost = item.price * qty;
-        subtotal += cost;
-        lineItems.push({ name: item.name, qty, cost });
-      }
+      if (qty > 0) { const cost = item.price * qty; subtotal += cost; lineItems.push({ name: item.name, qty, cost }); }
     });
-
-    if (lineItems.length === 0) {
-      return interaction.reply({ content: '⚠️ No items selected! Add at least one item to your order.', ephemeral: true });
-    }
-
+    if (lineItems.length === 0) return interaction.reply({ content: '⚠️ No items selected!', ephemeral: true });
     let discountPct = 0, discountLabel = '';
     if (applyDiscount && applyClearance) { discountPct = 0.25; discountLabel = '25% clearance sale (best discount applied)'; }
     else if (applyClearance)             { discountPct = 0.25; discountLabel = '25% clearance sale'; }
     else if (applyDiscount)              { discountPct = 0.15; discountLabel = '15% loyalty discount'; }
-
     const discountAmt = Math.round(subtotal * discountPct * 100) / 100;
     const total = subtotal - discountAmt;
-
     const embed = new EmbedBuilder()
-      .setTitle('🧪 Potion Order Summary')
-      .setColor(applyClearance ? 0xF1C40F : 0x5865F2)
+      .setTitle('🧪 Potion Order Summary').setColor(applyClearance ? 0xF1C40F : 0x5865F2)
       .addFields(lineItems.map(l => ({ name: l.name, value: `× ${l.qty} — **${l.cost} Galleons**`, inline: true })))
       .addFields({ name: '\u200b', value: '─────────────────', inline: false });
-
-    if (discountPct > 0) {
-      embed.addFields(
-        { name: 'Subtotal', value: `${subtotal} Galleons`, inline: true },
-        { name: `Discount (${discountPct * 100}%)`, value: `−${discountAmt} Galleons`, inline: true },
-      );
-    }
-
+    if (discountPct > 0) embed.addFields(
+      { name: 'Subtotal', value: `${subtotal} Galleons`, inline: true },
+      { name: `Discount (${discountPct * 100}%)`, value: `−${discountAmt} Galleons`, inline: true },
+    );
     embed.addFields({ name: '💰 Total', value: `**${total} Galleons**`, inline: false })
-      .setFooter({ text: discountPct > 0 ? `${discountLabel} applied` : 'No discount applied' })
-      .setTimestamp();
-
+      .setFooter({ text: discountPct > 0 ? `${discountLabel} applied` : 'No discount applied' }).setTimestamp();
     return interaction.reply({ embeds: [embed] });
   }
 
   // ── /logpurchase ────────────────────────────────────────────────────────────
   if (interaction.commandName === 'logpurchase') {
-    if (!hasLogRole(interaction.member)) {
-      return interaction.reply({ content: '❌ Only **Owner** can log purchases.', ephemeral: true });
-    }
-
+    if (!hasLogRole(interaction.member)) return interaction.reply({ content: '❌ Only **Owner** can log purchases.', ephemeral: true });
     const customer = interaction.options.getUser('customer');
     const potions  = interaction.options.getInteger('potions');
     const note     = interaction.options.getString('note') ?? null;
     const member   = await interaction.guild.members.fetch(customer.id).catch(() => null);
-
-    if (!member) {
-      return interaction.reply({ content: '❌ Could not find that user in this server.', ephemeral: true });
-    }
-
+    if (!member) return interaction.reply({ content: '❌ Could not find that user in this server.', ephemeral: true });
     const prevCount = await getCount(customer.id);
     const newCount  = prevCount + potions;
     await setCount(customer.id, newCount);
-
     const prevTier = getTierForCount(prevCount);
     const newTier  = getTierForCount(newCount);
     const tieredUp = newTier && newTier.threshold !== (prevTier?.threshold ?? -1);
-
     const verifiedRole = REWARDS.find(r => r.threshold === 1);
     if (tieredUp) {
       for (const reward of REWARDS) {
         const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
         if (role) {
-          if (reward.role === newTier.role || reward.role === verifiedRole.role) {
-            await member.roles.add(role).catch(() => {});
-          } else {
-            await member.roles.remove(role).catch(() => {});
-          }
+          if (reward.role === newTier.role || reward.role === verifiedRole.role) await member.roles.add(role).catch(() => {});
+          else await member.roles.remove(role).catch(() => {});
         }
       }
     }
-
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > newCount) ?? null;
     const nextTierText = nextTier ? `${nextTier.threshold - newCount} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
-
     const logChannel = interaction.guild.channels.cache.find(c => c.name === LOG_CHANNEL);
     if (logChannel) {
-      const logEmbed = new EmbedBuilder()
-        .setTitle('📋 Purchase Logged')
-        .setColor(tieredUp ? 0xF1C40F : 0x57F287)
+      const logEmbed = new EmbedBuilder().setTitle('📋 Purchase Logged').setColor(tieredUp ? 0xF1C40F : 0x57F287)
         .setThumbnail(customer.displayAvatarURL())
         .addFields(
-          { name: 'Customer',      value: `<@${customer.id}>`,         inline: true },
-          { name: 'Potions Added', value: `+${potions}`,               inline: true },
-          { name: 'Total Potions', value: `${newCount}`,                inline: true },
+          { name: 'Customer',      value: `<@${customer.id}>`,        inline: true },
+          { name: 'Potions Added', value: `+${potions}`,              inline: true },
+          { name: 'Total Potions', value: `${newCount}`,               inline: true },
           { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
-          { name: 'Next Tier',     value: nextTierText,                 inline: true },
-          { name: 'Logged by',     value: `<@${interaction.user.id}>`,  inline: true },
+          { name: 'Next Tier',     value: nextTierText,                inline: true },
+          { name: 'Logged by',     value: `<@${interaction.user.id}>`, inline: true },
         );
       if (note) logEmbed.addFields({ name: '📝 Note', value: note, inline: false });
       if (tieredUp) logEmbed.addFields({ name: '🎉 Tier Up!', value: `${customer.username} has reached **${newTier.label}**!`, inline: false });
       logEmbed.setTimestamp();
       await logChannel.send({ embeds: [logEmbed] });
     }
-
-    const replyEmbed = new EmbedBuilder()
-      .setTitle('✅ Purchase Logged')
-      .setColor(0x57F287)
+    const replyEmbed = new EmbedBuilder().setTitle('✅ Purchase Logged').setColor(0x57F287)
       .addFields(
         { name: 'Customer',      value: `<@${customer.id}>`, inline: true },
         { name: 'Potions Added', value: `+${potions}`,       inline: true },
         { name: 'New Total',     value: `${newCount}`,        inline: true },
         { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
-      )
-      .setTimestamp();
-
+      ).setTimestamp();
     if (tieredUp) replyEmbed.setDescription(`🎉 **${customer.username}** just ranked up to **${newTier.label}**!`);
     return interaction.reply({ embeds: [replyEmbed], ephemeral: true });
   }
 
   // ── /checkpotions ───────────────────────────────────────────────────────────
   if (interaction.commandName === 'checkpotions') {
-    if (!hasAllowedRole(interaction.member)) {
-      return interaction.reply({ content: '❌ Only **Manager** and **Owner** roles can check potion counts.', ephemeral: true });
-    }
-
+    if (!hasAllowedRole(interaction.member)) return interaction.reply({ content: '❌ Only **Manager** and **Owner** roles can check potion counts.', ephemeral: true });
     const customer = interaction.options.getUser('customer');
     const count    = await getCount(customer.id);
     const tier     = getTierForCount(count);
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > count) ?? null;
     const nextTierText = nextTier ? `${nextTier.threshold - count} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
-
-    const embed = new EmbedBuilder()
-      .setTitle(`🧪 Potion History — ${customer.username}`)
-      .setColor(0x5865F2)
+    const embed = new EmbedBuilder().setTitle(`🧪 Potion History — ${customer.username}`).setColor(0x5865F2)
       .setThumbnail(customer.displayAvatarURL())
       .addFields(
         { name: 'Total Potions', value: `${count}`,                     inline: true },
         { name: 'Current Tier',  value: tier ? tier.label : 'None yet', inline: true },
         { name: 'Next Tier',     value: nextTierText,                    inline: false },
-      )
-      .setTimestamp();
-
+      ).setTimestamp();
     return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
@@ -304,99 +379,81 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'leaderboard') {
     const rows = await getAllCounts();
     const top5 = rows.slice(0, 5);
-
-    if (top5.length === 0) {
-      return interaction.reply({ content: '📭 No purchases have been logged yet!', ephemeral: true });
-    }
-
+    if (top5.length === 0) return interaction.reply({ content: '📭 No purchases have been logged yet!', ephemeral: true });
     const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
     const fields = await Promise.all(top5.map(async (row, i) => {
       const user = await client.users.fetch(row.user_id).catch(() => null);
       const tier = getTierForCount(row.total);
-      return {
-        name: `${medals[i]} ${user ? user.username : 'Unknown User'}`,
-        value: `**${row.total}** potions — ${tier ? tier.label : 'No tier yet'}`,
-        inline: false,
-      };
+      return { name: `${medals[i]} ${user ? user.username : 'Unknown User'}`, value: `**${row.total}** potions — ${tier ? tier.label : 'No tier yet'}`, inline: false };
     }));
-
-    const embed = new EmbedBuilder()
-      .setTitle('🏆 Potion Leaderboard — Top 5 Customers')
-      .setColor(0xF1C40F)
-      .addFields(fields)
-      .setFooter({ text: 'Rankings based on total potions purchased' })
-      .setTimestamp();
-
+    const embed = new EmbedBuilder().setTitle('🏆 Potion Leaderboard — Top 5 Customers').setColor(0xF1C40F)
+      .addFields(fields).setFooter({ text: 'Rankings based on total potions purchased' }).setTimestamp();
     return interaction.reply({ embeds: [embed] });
   }
 
   // ── /restorelog ─────────────────────────────────────────────────────────────
   if (interaction.commandName === 'restorelog') {
-    if (!hasLogRole(interaction.member)) {
-      return interaction.reply({ content: '❌ Only **Owner** can restore logs.', ephemeral: true });
-    }
-
+    if (!hasLogRole(interaction.member)) return interaction.reply({ content: '❌ Only **Owner** can restore logs.', ephemeral: true });
     const customer = interaction.options.getUser('customer');
     const total    = interaction.options.getInteger('total');
     const member   = await interaction.guild.members.fetch(customer.id).catch(() => null);
-
     await setCount(customer.id, total);
-
-    // Assign correct tier role + always give Verified Customer
-    const newTier = getTierForCount(total);
+    const newTier      = getTierForCount(total);
     const verifiedRole = REWARDS.find(r => r.threshold === 1);
     if (member && newTier) {
       for (const reward of REWARDS) {
         const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
         if (role) {
-          // Always keep Verified Customer role, plus assign top tier role
-          if (reward.role === newTier.role || reward.role === verifiedRole.role) {
-            await member.roles.add(role).catch(() => {});
-          } else {
-            await member.roles.remove(role).catch(() => {});
-          }
+          if (reward.role === newTier.role || reward.role === verifiedRole.role) await member.roles.add(role).catch(() => {});
+          else await member.roles.remove(role).catch(() => {});
         }
       }
     }
-
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > total) ?? null;
     const nextTierText = nextTier ? `${nextTier.threshold - total} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
-
-    const embed = new EmbedBuilder()
-      .setTitle('♻️ Potion Log Restored')
-      .setColor(0x5865F2)
+    const embed = new EmbedBuilder().setTitle('♻️ Potion Log Restored').setColor(0x5865F2)
       .setThumbnail(customer.displayAvatarURL())
       .addFields(
         { name: 'Customer',      value: `<@${customer.id}>`,                  inline: true },
         { name: 'Total Potions', value: `${total}`,                            inline: true },
         { name: 'Current Tier',  value: newTier ? newTier.label : 'None yet', inline: true },
         { name: 'Next Tier',     value: nextTierText,                          inline: false },
-      )
-      .setFooter({ text: `Restored by ${interaction.user.username}` })
-      .setTimestamp();
-
+      ).setFooter({ text: `Restored by ${interaction.user.username}` }).setTimestamp();
     return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // ── /updateinventory ────────────────────────────────────────────────────────
+  if (interaction.commandName === 'updateinventory') {
+    if (!hasLogRole(interaction.member)) return interaction.reply({ content: '❌ Only **Owner** can update inventory.', ephemeral: true });
+
+    let updated = 0;
+    for (const item of ITEMS) {
+      const optionName = item.name.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,32);
+      const qty = interaction.options.getInteger(optionName);
+      if (qty !== null) { await setInventoryItem(item.name, qty); updated++; }
+    }
+
+    if (updated === 0) return interaction.reply({ content: '⚠️ No items were updated! Enter a quantity for at least one potion.', ephemeral: true });
+
+    await updateInventoryMessage(interaction.guild);
+    return interaction.reply({ content: `✅ Inventory updated for ${updated} item(s) and the inventory message has been refreshed!`, ephemeral: true });
   }
 
   // ── /help ───────────────────────────────────────────────────────────────────
   if (interaction.commandName === 'help') {
-    const embed = new EmbedBuilder()
-      .setTitle('🧙 Potion Shop Bot — Commands')
-      .setColor(0x5865F2)
+    const embed = new EmbedBuilder().setTitle('🧙 Potion Shop Bot — Commands').setColor(0x5865F2)
       .setDescription('Commands marked 🔒 require **Manager** or **Owner**. Commands marked 👑 require **Owner** only.')
       .addFields(
-        { name: '🔒 `/order`',        value: 'Calculate the total cost of a potion order with optional 15% or 25% discounts.', inline: false },
-        { name: '👑 `/logpurchase`',  value: 'Log potions purchased by a customer. Updates their total, assigns their rewards tier, and posts to `#person-log`.', inline: false },
-        { name: '🔒 `/checkpotions`', value: 'Check a customer\'s total potion count, current tier, and progress to the next tier.', inline: false },
-        { name: '🏆 `/leaderboard`',  value: 'Shows the top 5 customers with the most potions purchased.', inline: false },
-        { name: '👑 `/restorelog`',   value: 'Restore a customer\'s potion total from old logs. Use this to rebuild data after a reset.', inline: false },
-        { name: '❓ `/help`',         value: 'Shows this help message.', inline: false },
-        { name: '\u200b',             value: '**Rewards Tiers**', inline: false },
+        { name: '🔒 `/order`',            value: 'Calculate the total cost of a potion order with optional 15% or 25% discounts.', inline: false },
+        { name: '👑 `/logpurchase`',       value: 'Log potions purchased by a customer. Updates their total, assigns their rewards tier, and posts to `#person-log`.', inline: false },
+        { name: '🔒 `/checkpotions`',      value: 'Check a customer\'s total potion count, current tier, and progress to the next tier.', inline: false },
+        { name: '🏆 `/leaderboard`',       value: 'Shows the top 5 customers with the most potions purchased.', inline: false },
+        { name: '👑 `/restorelog`',        value: 'Restore a customer\'s potion total from old logs.', inline: false },
+        { name: '👑 `/updateinventory`',   value: 'Update stock quantities for any potion. Automatically refreshes the inventory message in `#📰┋inventory-log`.', inline: false },
+        { name: '❓ `/help`',              value: 'Shows this help message.', inline: false },
+        { name: '\u200b',                  value: '**Rewards Tiers**', inline: false },
         ...REWARDS.map(r => ({ name: r.label, value: `${r.threshold}+ potions`, inline: true })),
-      )
-      .setFooter({ text: 'Potion Shop Bot' })
-      .setTimestamp();
-
+      ).setFooter({ text: 'Potion Shop Bot' }).setTimestamp();
     return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 });
