@@ -276,7 +276,7 @@ async function updateLeaderboardMessage(guild) {
   }
 
   lines.push('    ══════════════════════════════');
-  lines.push(`    🕯️ Refreshes every 10 minutes`);
+  lines.push(`    🕯️ Refreshes every 30 minutes`);
   lines.push('    ══════════════════════════════');
   lines.push('```');
   lines.push(`> *Last updated <t:${Math.floor(Date.now() / 1000)}:R>*`);
