@@ -194,9 +194,9 @@ function buildInventoryText(rows) {
     '',
     '    ══════════════════════════════',
     `    📦 Total: x${totalQty}  🟡 Low: ${lowCount}  🔴 Out: ${outCount}`,
-    `    🕯️ Last updated: <t:${Math.floor(Date.now() / 1000)}:R>`,
     '    ══════════════════════════════',
     '```',
+    `> 🕯️ *Last updated <t:${Math.floor(Date.now() / 1000)}:R>*`,
   ];
 
   return lines.join('\n');
