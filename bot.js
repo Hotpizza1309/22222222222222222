@@ -6,7 +6,7 @@ const ALLOWED_ROLES   = ['Manager', 'Owner'];
 const LOG_ROLES       = ['Owner'];
 const LOG_CHANNEL     = 'person-log';
 const INV_CHANNEL     = '📰┋inventory-log';
-const LOW_STOCK_LIMIT = 30;
+const LOW_STOCK_LIMIT = 35;
 
 const REWARDS = [
   { label: '🔥 Grand Potion Lord',  role: '🔥 Grand Potion Lord',  threshold: 500 },
