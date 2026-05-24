@@ -222,12 +222,16 @@ client.on('interactionCreate', async interaction => {
     const newTier  = getTierForCount(newCount);
     const tieredUp = newTier && newTier.threshold !== (prevTier?.threshold ?? -1);
 
+    const verifiedRole = REWARDS.find(r => r.threshold === 1);
     if (tieredUp) {
       for (const reward of REWARDS) {
         const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
         if (role) {
-          if (reward.role === newTier.role) await member.roles.add(role).catch(() => {});
-          else await member.roles.remove(role).catch(() => {});
+          if (reward.role === newTier.role || reward.role === verifiedRole.role) {
+            await member.roles.add(role).catch(() => {});
+          } else {
+            await member.roles.remove(role).catch(() => {});
+          }
         }
       }
     }
