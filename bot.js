@@ -281,8 +281,7 @@ async function updateLeaderboardMessage(guild) {
   lines.push('```');
   lines.push(`> *Last updated <t:${Math.floor(Date.now() / 1000)}:R>*`);
 
-  const content = lines.join('
-');
+  const content = lines.join('\n');
   const saved   = await getSavedLeaderboardMessage();
 
   if (saved) {
