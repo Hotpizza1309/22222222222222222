@@ -226,16 +226,32 @@ const restoreCommand = new SlashCommandBuilder()
   .addUserOption(opt => opt.setName('customer').setDescription('The customer to restore').setRequired(true))
   .addIntegerOption(opt => opt.setName('total').setDescription('Their total potion count from the logs').setMinValue(1).setRequired(true));
 
-// Build /updateinventory with one option per item
+// Build /updateinventory with dropdown potion, action, and amount
 const updateInvCommand = new SlashCommandBuilder()
   .setName('updateinventory')
-  .setDescription('Update the stock quantity for a potion');
-ITEMS.forEach(item => {
-  const optionName = item.name.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,32);
-  updateInvCommand.addIntegerOption(opt =>
-    opt.setName(optionName).setDescription(`Set stock for ${item.name}`).setMinValue(0).setRequired(false)
+  .setDescription('Withdraw or restock a potion in inventory')
+  .addStringOption(opt =>
+    opt.setName('potion')
+       .setDescription('Which potion to update')
+       .setRequired(true)
+       .addChoices(...ITEMS.map(i => ({ name: i.name, value: i.name })))
+  )
+  .addStringOption(opt =>
+    opt.setName('action')
+       .setDescription('Withdraw or Restock?')
+       .setRequired(true)
+       .addChoices(
+         { name: 'Withdraw', value: 'withdraw' },
+         { name: 'Restock',  value: 'restock'  },
+         { name: 'Set',      value: 'set'       },
+       )
+  )
+  .addIntegerOption(opt =>
+    opt.setName('amount')
+       .setDescription('How many potions?')
+       .setMinValue(1)
+       .setRequired(true)
   );
-});
 
 // ── Register commands ─────────────────────────────────────────────────────────
 async function registerCommands(clientId, token) {
@@ -426,17 +442,33 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'updateinventory') {
     if (!hasLogRole(interaction.member)) return interaction.reply({ content: '❌ Only **Owner** can update inventory.', ephemeral: true });
 
-    let updated = 0;
-    for (const item of ITEMS) {
-      const optionName = item.name.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,32);
-      const qty = interaction.options.getInteger(optionName);
-      if (qty !== null) { await setInventoryItem(item.name, qty); updated++; }
+    const potion = interaction.options.getString('potion');
+    const action = interaction.options.getString('action');
+    const amount = interaction.options.getInteger('amount');
+
+    // Get current stock
+    const rows = await getInventory();
+    const current = rows.find(r => r.item_name === potion)?.quantity ?? 0;
+
+    let newQty;
+    if (action === 'withdraw') {
+      newQty = Math.max(0, current - amount);
+    } else if (action === 'restock') {
+      newQty = current + amount;
+    } else {
+      newQty = amount;
     }
 
-    if (updated === 0) return interaction.reply({ content: '⚠️ No items were updated! Enter a quantity for at least one potion.', ephemeral: true });
-
+    await setInventoryItem(potion, newQty);
     await updateInventoryMessage(interaction.guild);
-    return interaction.reply({ content: `✅ Inventory updated for ${updated} item(s) and the inventory message has been refreshed!`, ephemeral: true });
+
+    const actionText = action === 'withdraw' ? `withdrew **${amount}**` : action === 'restock' ? `restocked **+${amount}**` : `set to **${newQty}**`;
+    const stockText  = stockLabel(newQty);
+
+    return interaction.reply({
+      content: `✅ **${potion}**: ${actionText} — now at **x${newQty}** ${stockText}`,
+      ephemeral: true
+    });
   }
 
   // ── /help ───────────────────────────────────────────────────────────────────
