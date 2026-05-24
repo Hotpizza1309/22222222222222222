@@ -6,7 +6,8 @@ const ALLOWED_ROLES   = ['Manager', 'Owner'];
 const LOG_ROLES       = ['Owner'];
 const LOG_CHANNEL     = 'person-log';
 const INV_CHANNEL     = '📰┋inventory-log';
-const LOW_STOCK_LIMIT = 35;
+const LB_CHANNEL      = '🕯️┋rewards';
+const LOW_STOCK_LIMIT = 30;
 
 const REWARDS = [
   { label: '🔥 Grand Potion Lord',  role: '🔥 Grand Potion Lord',  threshold: 500 },
@@ -77,6 +78,13 @@ async function initDB() {
       channel_id TEXT
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leaderboard_message (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      message_id TEXT,
+      channel_id TEXT
+    )
+  `);
   // Seed inventory with 0 for any missing items
   for (const name of INVENTORY_ITEMS) {
     await pool.query(`
@@ -124,6 +132,18 @@ async function getSavedMessage() {
 async function saveMessageRef(messageId, channelId) {
   await pool.query(`
     INSERT INTO inventory_message (id, message_id, channel_id) VALUES (1, $1, $2)
+    ON CONFLICT (id) DO UPDATE SET message_id = $1, channel_id = $2
+  `, [messageId, channelId]);
+}
+
+async function getSavedLeaderboardMessage() {
+  const res = await pool.query('SELECT message_id, channel_id FROM leaderboard_message WHERE id = 1');
+  return res.rows[0] ?? null;
+}
+
+async function saveLeaderboardMessageRef(messageId, channelId) {
+  await pool.query(`
+    INSERT INTO leaderboard_message (id, message_id, channel_id) VALUES (1, $1, $2)
     ON CONFLICT (id) DO UPDATE SET message_id = $1, channel_id = $2
   `, [messageId, channelId]);
 }
@@ -224,6 +244,62 @@ async function updateInventoryMessage(guild) {
   await saveMessageRef(newMsg.id, invChannel.id);
 }
 
+async function updateLeaderboardMessage(guild) {
+  const lbChannel = guild.channels.cache.find(c => c.name === LB_CHANNEL);
+  if (!lbChannel) return;
+
+  const rows  = await getAllCounts();
+  const top10 = rows.slice(0, 10);
+  const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+  const lines = [
+    '```',
+    '✨ ═══════════════════════════════ ✨',
+    '    🏆 OFFICE OF EXPERIMENTAL ELIXIRS',
+    '         📜 Potion Leaderboard 📜',
+    '✨ ═══════════════════════════════ ✨',
+    '',
+  ];
+
+  if (top10.length === 0) {
+    lines.push('    No purchases logged yet!');
+  } else {
+    for (let i = 0; i < top10.length; i++) {
+      const row  = top10[i];
+      const user = await guild.client.users.fetch(row.user_id).catch(() => null);
+      const tier = getTierForCount(row.total);
+      const name = user ? user.username : 'Unknown User';
+      lines.push(`  ${medals[i]} ${name}`);
+      lines.push(`      ┣ ${row.total} potions  —  ${tier ? tier.label : 'No tier yet'}`);
+      lines.push('');
+    }
+  }
+
+  lines.push('    ══════════════════════════════');
+  lines.push(`    🕯️ Refreshes every 10 minutes`);
+  lines.push('    ══════════════════════════════');
+  lines.push('```');
+  lines.push(`> *Last updated <t:${Math.floor(Date.now() / 1000)}:R>*`);
+
+  const content = lines.join('
+');
+  const saved   = await getSavedLeaderboardMessage();
+
+  if (saved) {
+    try {
+      const ch  = await guild.channels.fetch(saved.channel_id);
+      const msg = await ch.messages.fetch(saved.message_id);
+      await msg.edit(content);
+      return;
+    } catch {
+      // Message was deleted, send a new one
+    }
+  }
+
+  const newMsg = await lbChannel.send(content);
+  await saveLeaderboardMessageRef(newMsg.id, lbChannel.id);
+}
+
 // ── Slash command definitions ─────────────────────────────────────────────────
 const orderCommand = new SlashCommandBuilder()
   .setName('order')
@@ -317,6 +393,16 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initDB();
   await registerCommands(client.user.id, process.env.DISCORD_TOKEN);
+
+  // Auto-refresh leaderboard every 10 minutes
+  const guild = client.guilds.cache.first();
+  if (guild) {
+    await updateLeaderboardMessage(guild);
+    setInterval(async () => {
+      const g = client.guilds.cache.first();
+      if (g) await updateLeaderboardMessage(g);
+    }, 30 * 60 * 1000);
+  }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -407,6 +493,7 @@ client.on('interactionCreate', async interaction => {
         { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
       ).setTimestamp();
     if (tieredUp) replyEmbed.setDescription(`🎉 **${customer.username}** just ranked up to **${newTier.label}**!`);
+    await updateLeaderboardMessage(interaction.guild);
     return interaction.reply({ embeds: [replyEmbed], ephemeral: false });
   }
 
