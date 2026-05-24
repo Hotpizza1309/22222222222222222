@@ -252,6 +252,26 @@ async function updateLeaderboardMessage(guild) {
   const top10 = rows.slice(0, 10);
   const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
+  const topRoles = ['🥇 First Place', '🥈 Second Place', '🥉 Third Place'];
+
+  // Remove all top 3 roles from everyone who has them
+  for (const roleName of topRoles) {
+    const role = guild.roles.cache.find(r => r.name === roleName);
+    if (!role) continue;
+    const members = role.members;
+    for (const [, member] of members) {
+      await member.roles.remove(role).catch(() => {});
+    }
+  }
+
+  // Assign new top 3 roles
+  for (let i = 0; i < Math.min(3, top10.length); i++) {
+    const role = guild.roles.cache.find(r => r.name === topRoles[i]);
+    if (!role) continue;
+    const member = await guild.members.fetch(top10[i].user_id).catch(() => null);
+    if (member) await member.roles.add(role).catch(() => {});
+  }
+
   const fields = [];
   if (top10.length === 0) {
     fields.push({ name: 'No entries yet', value: 'No purchases have been logged yet!', inline: false });
