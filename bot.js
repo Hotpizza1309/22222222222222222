@@ -370,7 +370,7 @@ client.on('interactionCreate', async interaction => {
         { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
       ).setTimestamp();
     if (tieredUp) replyEmbed.setDescription(`🎉 **${customer.username}** just ranked up to **${newTier.label}**!`);
-    return interaction.reply({ embeds: [replyEmbed], ephemeral: true });
+    return interaction.reply({ embeds: [replyEmbed], ephemeral: false });
   }
 
   // ── /checkpotions ───────────────────────────────────────────────────────────
