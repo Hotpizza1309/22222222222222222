@@ -252,50 +252,43 @@ async function updateLeaderboardMessage(guild) {
   const top10 = rows.slice(0, 10);
   const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
-  const lines = [
-    '```',
-    '✨ ═══════════════════════════════ ✨',
-    '    🏆 OFFICE OF EXPERIMENTAL ELIXIRS',
-    '         📜 Potion Leaderboard 📜',
-    '✨ ═══════════════════════════════ ✨',
-    '',
-  ];
-
+  const fields = [];
   if (top10.length === 0) {
-    lines.push('    No purchases logged yet!');
+    fields.push({ name: 'No entries yet', value: 'No purchases have been logged yet!', inline: false });
   } else {
     for (let i = 0; i < top10.length; i++) {
       const row  = top10[i];
-      const user = await guild.client.users.fetch(row.user_id).catch(() => null);
       const tier = getTierForCount(row.total);
-      const name = user ? `<@${row.user_id}>` : 'Unknown User';
-      lines.push(`  ${medals[i]} ${name}`);
-      lines.push(`      ┣ ${row.total} potions  —  ${tier ? tier.label : 'No tier yet'}`);
-      lines.push('');
+      fields.push({
+        name: `${medals[i]} #${i + 1}`,
+        value: `<@${row.user_id}>\n${row.total} potions — ${tier ? tier.label : 'No tier yet'}`,
+        inline: true,
+      });
     }
   }
 
-  lines.push('    ══════════════════════════════');
-  lines.push(`    🕯️ Refreshes every 30 minutes`);
-  lines.push('    ══════════════════════════════');
-  lines.push('```');
-  lines.push(`> *Last updated <t:${Math.floor(Date.now() / 1000)}:R>*`);
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 Potion Shop — Customer Leaderboard')
+    .setColor(0xF1C40F)
+    .setDescription('Top 10 customers by total potions purchased')
+    .addFields(fields)
+    .setFooter({ text: '🕯️ Refreshes every 30 minutes' })
+    .setTimestamp();
 
-  const content = lines.join('\n');
-  const saved   = await getSavedLeaderboardMessage();
+  const saved = await getSavedLeaderboardMessage();
 
   if (saved) {
     try {
       const ch  = await guild.channels.fetch(saved.channel_id);
       const msg = await ch.messages.fetch(saved.message_id);
-      await msg.edit(content);
+      await msg.edit({ content: '', embeds: [embed] });
       return;
     } catch {
       // Message was deleted, send a new one
     }
   }
 
-  const newMsg = await lbChannel.send(content);
+  const newMsg = await lbChannel.send({ content: '', embeds: [embed] });
   await saveLeaderboardMessageRef(newMsg.id, lbChannel.id);
 }
 
