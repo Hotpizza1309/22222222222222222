@@ -268,7 +268,7 @@ async function updateLeaderboardMessage(guild) {
       const row  = top10[i];
       const user = await guild.client.users.fetch(row.user_id).catch(() => null);
       const tier = getTierForCount(row.total);
-      const name = user ? user.username : 'Unknown User';
+      const name = user ? `<@${row.user_id}>` : 'Unknown User';
       lines.push(`  ${medals[i]} ${name}`);
       lines.push(`      ┣ ${row.total} potions  —  ${tier ? tier.label : 'No tier yet'}`);
       lines.push('');
