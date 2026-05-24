@@ -1,4 +1,3 @@
-
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -137,6 +136,11 @@ function stockLabel(qty) {
   return '🟢 {In Stock}';
 }
 
+function pad(name, total) {
+  const dots = total - name.length;
+  return name + ' ' + '.'.repeat(Math.max(0, dots));
+}
+
 function buildInventoryText(rows) {
   const map = {};
   rows.forEach(r => { map[r.item_name] = r.quantity; });
@@ -144,56 +148,43 @@ function buildInventoryText(rows) {
   const advanced = ITEMS.filter(i => ADVANCED_POTIONS.includes(i.name));
   const regular  = ITEMS.filter(i => !ADVANCED_POTIONS.includes(i.name));
 
+  const maxLen = Math.max(...ITEMS.map(i => i.name.length)) + 2;
+
   const fmt = (item) => {
-    const qty = map[item.name] ?? 0;
-    const label = qty === 0 ? '🔴 OUT OF STOCK' : qty < LOW_STOCK_LIMIT ? '🟡 LOW STOCK' : '🟢 IN STOCK';
-    const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
-    return `  ╟─ ${item.name}\n  ║   ┣ Stock: **x${qty}** ${bar}\n  ║   ┗ ${label}`;
+    const qty   = map[item.name] ?? 0;
+    const emoji = qty === 0 ? '🔴' : qty < LOW_STOCK_LIMIT ? '🟡' : '🟢';
+    const label = qty === 0 ? '{Out of Stock}' : qty < LOW_STOCK_LIMIT ? '{Low Stock}' : '{In Stock}';
+    return `    ${emoji} ${pad(item.name, maxLen)} x${qty}  ${label}`;
   };
 
   const totalQty = ITEMS.reduce((sum, item) => sum + (map[item.name] ?? 0), 0);
-  const lowItems = ITEMS.filter(i => (map[i.name] ?? 0) > 0 && (map[i.name] ?? 0) < LOW_STOCK_LIMIT);
-  const outItems = ITEMS.filter(i => (map[i.name] ?? 0) === 0);
+  const lowCount = ITEMS.filter(i => (map[i.name] ?? 0) > 0 && (map[i.name] ?? 0) < LOW_STOCK_LIMIT).length;
+  const outCount = ITEMS.filter(i => (map[i.name] ?? 0) === 0).length;
 
   const lines = [
-    '```ansi',
-    '╔══════════════════════════════════════╗',
-    '║   ⚗️  OFFICE OF EXPERIMENTAL ELIXIRS  ║',
-    '║         ~ Stock Manifest ~           ║',
-    '╚══════════════════════════════════════╝',
-    '',
-    '┌─────────────────────────────────────┐',
-    '│         ⚗️  ADVANCED POTIONS          │',
-    '└─────────────────────────────────────┘',
-    ...advanced.map(item => {
-      const qty = map[item.name] ?? 0;
-      const label = qty === 0 ? '[OUT OF STOCK]' : qty < LOW_STOCK_LIMIT ? '[LOW STOCK]' : '[IN STOCK]';
-      const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
-      return `  • ${item.name}\n    ┣ x${qty}  ${bar}  ${label}`;
-    }),
-    '',
-    '┌─────────────────────────────────────┐',
-    '│          🧪  REGULAR POTIONS          │',
-    '└─────────────────────────────────────┘',
-    ...regular.map(item => {
-      const qty = map[item.name] ?? 0;
-      const label = qty === 0 ? '[OUT OF STOCK]' : qty < LOW_STOCK_LIMIT ? '[LOW STOCK]' : '[IN STOCK]';
-      const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
-      return `  • ${item.name}\n    ┣ x${qty}  ${bar}  ${label}`;
-    }),
-    '',
-    '╔══════════════════════════════════════╗',
-    `║  📦 Total Potions in Stock: x${totalQty}`,
-    `║  🟡 Low Stock Items: ${lowItems.length}`,
-    `║  🔴 Out of Stock Items: ${outItems.length}`,
-    '╚══════════════════════════════════════╝',
     '```',
-    `> 🕯️ *Last updated <t:${Math.floor(Date.now() / 1000)}:R> by the Potions Office*`,
+    '✨ ═══════════════════════════════ ✨',
+    '    🏰 OFFICE OF EXPERIMENTAL ELIXIRS',
+    '         📜 Stock Manifest 📜',
+    '✨ ═══════════════════════════════ ✨',
+    '',
+    '        ≪ ⚗️  ADVANCED POTIONS ⚗️ ≫',
+    '    ────────────────────────────────',
+    ...advanced.map(fmt),
+    '',
+    '        ≪ 🧪  REGULAR POTIONS 🧪 ≫',
+    '    ────────────────────────────────',
+    ...regular.map(fmt),
+    '',
+    '    ══════════════════════════════',
+    `    📦 Total: x${totalQty}  🟡 Low: ${lowCount}  🔴 Out: ${outCount}`,
+    `    🕯️ Last updated: <t:${Math.floor(Date.now() / 1000)}:R>`,
+    '    ══════════════════════════════',
+    '```',
   ];
 
   return lines.join('\n');
 }
-
 async function updateInventoryMessage(guild) {
   const invChannel = guild.channels.cache.find(c => c.name === INV_CHANNEL);
   if (!invChannel) return;
