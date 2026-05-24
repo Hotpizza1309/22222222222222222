@@ -1,11 +1,10 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fs = require('fs');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { Pool } = require('pg');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const ALLOWED_ROLES = ['Manager', 'Owner'];
-const LOG_ROLES = ['Owner'];
+const LOG_ROLES     = ['Owner'];
 const LOG_CHANNEL   = 'person-log';
-const DATA_FILE     = './potion_data.json';
 
 const REWARDS = [
   { label: '🔥 Grand Potion Lord',  role: '🔥 Grand Potion Lord',  threshold: 500 },
@@ -31,22 +30,46 @@ const ITEMS = [
   { name: "Snape's Advanced Potion Book",  price: 50 },
 ];
 
-// ── Persistent storage ────────────────────────────────────────────────────────
-function loadData() {
-  try {
-    if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch (e) { console.error('Failed to load data:', e); }
-  return {};
+// ── Database ──────────────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS potion_totals (
+      user_id TEXT PRIMARY KEY,
+      total INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  console.log('Database ready.');
 }
 
-function saveData(data) {
-  try { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2)); }
-  catch (e) { console.error('Failed to save data:', e); }
+async function getCount(userId) {
+  const res = await pool.query('SELECT total FROM potion_totals WHERE user_id = $1', [userId]);
+  return res.rows[0]?.total ?? 0;
+}
+
+async function setCount(userId, total) {
+  await pool.query(`
+    INSERT INTO potion_totals (user_id, total) VALUES ($1, $2)
+    ON CONFLICT (user_id) DO UPDATE SET total = $2
+  `, [userId, total]);
+}
+
+async function getAllCounts() {
+  const res = await pool.query('SELECT user_id, total FROM potion_totals ORDER BY total DESC');
+  return res.rows;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function hasAllowedRole(member) {
   return member.roles.cache.some(r => ALLOWED_ROLES.includes(r.name));
+}
+
+function hasLogRole(member) {
+  return member.roles.cache.some(r => LOG_ROLES.includes(r.name));
 }
 
 function getTierForCount(count) {
@@ -86,6 +109,12 @@ const helpCommand = new SlashCommandBuilder()
   .setName('help')
   .setDescription('Show all available bot commands');
 
+const restoreCommand = new SlashCommandBuilder()
+  .setName('restorelog')
+  .setDescription('Restore a customers potion total from old logs')
+  .addUserOption(opt => opt.setName('customer').setDescription('The customer to restore').setRequired(true))
+  .addIntegerOption(opt => opt.setName('total').setDescription('Their total potion count from the logs').setMinValue(1).setRequired(true));
+
 // ── Register commands ─────────────────────────────────────────────────────────
 async function registerCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -98,6 +127,7 @@ async function registerCommands(clientId, token) {
         checkCommand.toJSON(),
         leaderboardCommand.toJSON(),
         helpCommand.toJSON(),
+        restoreCommand.toJSON(),
       ]
     });
     console.log('Slash commands registered.');
@@ -109,6 +139,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await initDB();
   await registerCommands(client.user.id, process.env.DISCORD_TOKEN);
 });
 
@@ -170,9 +201,8 @@ client.on('interactionCreate', async interaction => {
 
   // ── /logpurchase ────────────────────────────────────────────────────────────
   if (interaction.commandName === 'logpurchase') {
-    const hasLogRole = interaction.member.roles.cache.some(r => LOG_ROLES.includes(r.name));
-    if (!hasLogRole) {
-      return interaction.reply({ content: '❌ Only **Head Manager** and **Owner** roles can log purchases.', ephemeral: true });
+    if (!hasLogRole(interaction.member)) {
+      return interaction.reply({ content: '❌ Only **Owner** can log purchases.', ephemeral: true });
     }
 
     const customer = interaction.options.getUser('customer');
@@ -184,11 +214,9 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({ content: '❌ Could not find that user in this server.', ephemeral: true });
     }
 
-    const data      = loadData();
-    const prevCount = data[customer.id] ?? 0;
+    const prevCount = await getCount(customer.id);
     const newCount  = prevCount + potions;
-    data[customer.id] = newCount;
-    saveData(data);
+    await setCount(customer.id, newCount);
 
     const prevTier = getTierForCount(prevCount);
     const newTier  = getTierForCount(newCount);
@@ -205,9 +233,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > newCount) ?? null;
-    const nextTierText = nextTier
-      ? `${nextTier.threshold - newCount} more potions until **${nextTier.label}**`
-      : '🏆 Max tier reached!';
+    const nextTierText = nextTier ? `${nextTier.threshold - newCount} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
 
     const logChannel = interaction.guild.channels.cache.find(c => c.name === LOG_CHANNEL);
     if (logChannel) {
@@ -216,12 +242,12 @@ client.on('interactionCreate', async interaction => {
         .setColor(tieredUp ? 0xF1C40F : 0x57F287)
         .setThumbnail(customer.displayAvatarURL())
         .addFields(
-          { name: 'Customer',      value: `<@${customer.id}>`,        inline: true },
-          { name: 'Potions Added', value: `+${potions}`,              inline: true },
-          { name: 'Total Potions', value: `${newCount}`,               inline: true },
+          { name: 'Customer',      value: `<@${customer.id}>`,         inline: true },
+          { name: 'Potions Added', value: `+${potions}`,               inline: true },
+          { name: 'Total Potions', value: `${newCount}`,                inline: true },
           { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
-          { name: 'Next Tier',     value: nextTierText,                inline: true },
-          { name: 'Logged by',     value: `<@${interaction.user.id}>`, inline: true },
+          { name: 'Next Tier',     value: nextTierText,                 inline: true },
+          { name: 'Logged by',     value: `<@${interaction.user.id}>`,  inline: true },
         );
       if (note) logEmbed.addFields({ name: '📝 Note', value: note, inline: false });
       if (tieredUp) logEmbed.addFields({ name: '🎉 Tier Up!', value: `${customer.username} has reached **${newTier.label}**!`, inline: false });
@@ -251,22 +277,19 @@ client.on('interactionCreate', async interaction => {
     }
 
     const customer = interaction.options.getUser('customer');
-    const data     = loadData();
-    const count    = data[customer.id] ?? 0;
+    const count    = await getCount(customer.id);
     const tier     = getTierForCount(count);
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > count) ?? null;
-    const nextTierText = nextTier
-      ? `${nextTier.threshold - count} more potions until **${nextTier.label}**`
-      : '🏆 Max tier reached!';
+    const nextTierText = nextTier ? `${nextTier.threshold - count} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
 
     const embed = new EmbedBuilder()
       .setTitle(`🧪 Potion History — ${customer.username}`)
       .setColor(0x5865F2)
       .setThumbnail(customer.displayAvatarURL())
       .addFields(
-        { name: 'Total Potions', value: `${count}`,                        inline: true },
-        { name: 'Current Tier',  value: tier ? tier.label : 'None yet',    inline: true },
-        { name: 'Next Tier',     value: nextTierText,                       inline: false },
+        { name: 'Total Potions', value: `${count}`,                     inline: true },
+        { name: 'Current Tier',  value: tier ? tier.label : 'None yet', inline: true },
+        { name: 'Next Tier',     value: nextTierText,                    inline: false },
       )
       .setTimestamp();
 
@@ -275,25 +298,20 @@ client.on('interactionCreate', async interaction => {
 
   // ── /leaderboard ────────────────────────────────────────────────────────────
   if (interaction.commandName === 'leaderboard') {
-    const data = loadData();
+    const rows = await getAllCounts();
+    const top5 = rows.slice(0, 5);
 
-    const sorted = Object.entries(data)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5);
-
-    if (sorted.length === 0) {
+    if (top5.length === 0) {
       return interaction.reply({ content: '📭 No purchases have been logged yet!', ephemeral: true });
     }
 
     const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
-
-    const fields = await Promise.all(sorted.map(async ([userId, count], i) => {
-      const user = await client.users.fetch(userId).catch(() => null);
-      const tier = getTierForCount(count);
-      const username = user ? user.username : `Unknown User`;
+    const fields = await Promise.all(top5.map(async (row, i) => {
+      const user = await client.users.fetch(row.user_id).catch(() => null);
+      const tier = getTierForCount(row.total);
       return {
-        name: `${medals[i]} ${username}`,
-        value: `**${count}** potions — ${tier ? tier.label : 'No tier yet'}`,
+        name: `${medals[i]} ${user ? user.username : 'Unknown User'}`,
+        value: `**${row.total}** potions — ${tier ? tier.label : 'No tier yet'}`,
         inline: false,
       };
     }));
@@ -308,48 +326,64 @@ client.on('interactionCreate', async interaction => {
     return interaction.reply({ embeds: [embed] });
   }
 
+  // ── /restorelog ─────────────────────────────────────────────────────────────
+  if (interaction.commandName === 'restorelog') {
+    if (!hasLogRole(interaction.member)) {
+      return interaction.reply({ content: '❌ Only **Owner** can restore logs.', ephemeral: true });
+    }
+
+    const customer = interaction.options.getUser('customer');
+    const total    = interaction.options.getInteger('total');
+    const member   = await interaction.guild.members.fetch(customer.id).catch(() => null);
+
+    await setCount(customer.id, total);
+
+    // Assign correct tier role
+    const newTier = getTierForCount(total);
+    if (member && newTier) {
+      for (const reward of REWARDS) {
+        const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
+        if (role) {
+          if (reward.role === newTier.role) await member.roles.add(role).catch(() => {});
+          else await member.roles.remove(role).catch(() => {});
+        }
+      }
+    }
+
+    const nextTier = REWARDS.slice().reverse().find(r => r.threshold > total) ?? null;
+    const nextTierText = nextTier ? `${nextTier.threshold - total} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
+
+    const embed = new EmbedBuilder()
+      .setTitle('♻️ Potion Log Restored')
+      .setColor(0x5865F2)
+      .setThumbnail(customer.displayAvatarURL())
+      .addFields(
+        { name: 'Customer',      value: `<@${customer.id}>`,                  inline: true },
+        { name: 'Total Potions', value: `${total}`,                            inline: true },
+        { name: 'Current Tier',  value: newTier ? newTier.label : 'None yet', inline: true },
+        { name: 'Next Tier',     value: nextTierText,                          inline: false },
+      )
+      .setFooter({ text: `Restored by ${interaction.user.username}` })
+      .setTimestamp();
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
   // ── /help ───────────────────────────────────────────────────────────────────
   if (interaction.commandName === 'help') {
     const embed = new EmbedBuilder()
       .setTitle('🧙 Potion Shop Bot — Commands')
       .setColor(0x5865F2)
-      .setDescription('Here are all available commands. Commands marked 🔒 require the **Manager** or **Owner** role.')
+      .setDescription('Commands marked 🔒 require **Manager** or **Owner**. Commands marked 👑 require **Owner** only.')
       .addFields(
-        {
-          name: '🔒 `/order`',
-          value: 'Calculate the total cost of a potion order. Select quantities for each item and optionally apply a **15% loyalty** or **25% clearance sale** discount.',
-          inline: false,
-        },
-        {
-          name: '🔒 `/logpurchase`',
-          value: 'Log potions purchased by a customer. Automatically updates their total, assigns the correct rewards tier role, and posts to `#person-log`.',
-          inline: false,
-        },
-        {
-          name: '🔒 `/checkpotions`',
-          value: 'Check how many potions a customer has purchased in total, their current rewards tier, and how far they are from the next one.',
-          inline: false,
-        },
-        {
-          name: '🏆 `/leaderboard`',
-          value: 'Shows the top 5 customers with the most potions purchased of all time.',
-          inline: false,
-        },
-        {
-          name: '❓ `/help`',
-          value: 'Shows this help message.',
-          inline: false,
-        },
-        {
-          name: '\u200b',
-          value: '**Rewards Tiers**',
-          inline: false,
-        },
-        ...REWARDS.map(r => ({
-          name: r.label,
-          value: `${r.threshold}+ potions`,
-          inline: true,
-        })),
+        { name: '🔒 `/order`',        value: 'Calculate the total cost of a potion order with optional 15% or 25% discounts.', inline: false },
+        { name: '👑 `/logpurchase`',  value: 'Log potions purchased by a customer. Updates their total, assigns their rewards tier, and posts to `#person-log`.', inline: false },
+        { name: '🔒 `/checkpotions`', value: 'Check a customer\'s total potion count, current tier, and progress to the next tier.', inline: false },
+        { name: '🏆 `/leaderboard`',  value: 'Shows the top 5 customers with the most potions purchased.', inline: false },
+        { name: '👑 `/restorelog`',   value: 'Restore a customer\'s potion total from old logs. Use this to rebuild data after a reset.', inline: false },
+        { name: '❓ `/help`',         value: 'Shows this help message.', inline: false },
+        { name: '\u200b',             value: '**Rewards Tiers**', inline: false },
+        ...REWARDS.map(r => ({ name: r.label, value: `${r.threshold}+ potions`, inline: true })),
       )
       .setFooter({ text: 'Potion Shop Bot' })
       .setTimestamp();
