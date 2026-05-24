@@ -21,9 +21,20 @@ const ADVANCED_POTIONS = [
   "Animagus Potion",
   "Polyjuice Potion",
   "Death Potion",
-  "Exploding Potion",
+];
+
+const REGULAR_POTIONS = [
+  "Pittlebugs Exhaust Potion",
+  "Invisibility Potion",
+  "Shrinking Solution Potion",
+  "Healing Potion",
+];
+
+const ITEM_POTIONS = [
   "Snape's Advanced Potion Book",
 ];
+
+const INVENTORY_ITEMS = [...ADVANCED_POTIONS, ...REGULAR_POTIONS, ...ITEM_POTIONS];
 
 const ITEMS = [
   { name: "Animagus Potion",               price: 25 },
@@ -67,11 +78,11 @@ async function initDB() {
     )
   `);
   // Seed inventory with 0 for any missing items
-  for (const item of ITEMS) {
+  for (const name of INVENTORY_ITEMS) {
     await pool.query(`
       INSERT INTO inventory (item_name, quantity) VALUES ($1, 0)
       ON CONFLICT (item_name) DO NOTHING
-    `, [item.name]);
+    `, [name]);
   }
   console.log('Database ready.');
 }
@@ -146,9 +157,10 @@ function buildInventoryText(rows) {
   rows.forEach(r => { map[r.item_name] = r.quantity; });
 
   const advanced = ITEMS.filter(i => ADVANCED_POTIONS.includes(i.name));
-  const regular  = ITEMS.filter(i => !ADVANCED_POTIONS.includes(i.name));
+  const regular  = ITEMS.filter(i => REGULAR_POTIONS.includes(i.name));
+  const items    = ITEMS.filter(i => ITEM_POTIONS.includes(i.name));
 
-  const maxLen = Math.max(...ITEMS.map(i => i.name.length)) + 2;
+  const maxLen = Math.max(...INVENTORY_ITEMS.map(n => n.length)) + 2;
 
   const fmt = (item) => {
     const qty   = map[item.name] ?? 0;
@@ -157,9 +169,9 @@ function buildInventoryText(rows) {
     return `    ${emoji} ${pad(item.name, maxLen)} x${qty}  ${label}`;
   };
 
-  const totalQty = ITEMS.reduce((sum, item) => sum + (map[item.name] ?? 0), 0);
-  const lowCount = ITEMS.filter(i => (map[i.name] ?? 0) > 0 && (map[i.name] ?? 0) < LOW_STOCK_LIMIT).length;
-  const outCount = ITEMS.filter(i => (map[i.name] ?? 0) === 0).length;
+  const totalQty = INVENTORY_ITEMS.reduce((sum, name) => sum + (map[name] ?? 0), 0);
+  const lowCount = INVENTORY_ITEMS.filter(n => (map[n] ?? 0) > 0 && (map[n] ?? 0) < LOW_STOCK_LIMIT).length;
+  const outCount = INVENTORY_ITEMS.filter(n => (map[n] ?? 0) === 0).length;
 
   const lines = [
     '```',
@@ -175,6 +187,10 @@ function buildInventoryText(rows) {
     '        ≪ 🧪  REGULAR POTIONS 🧪 ≫',
     '    ────────────────────────────────',
     ...regular.map(fmt),
+    '',
+    '        ≪ 📚  ITEMS 📚 ≫',
+    '    ────────────────────────────────',
+    ...items.map(fmt),
     '',
     '    ══════════════════════════════',
     `    📦 Total: x${totalQty}  🟡 Low: ${lowCount}  🔴 Out: ${outCount}`,
@@ -255,7 +271,7 @@ const updateInvCommand = new SlashCommandBuilder()
     opt.setName('potion')
        .setDescription('Which potion to update')
        .setRequired(true)
-       .addChoices(...ITEMS.map(i => ({ name: i.name, value: i.name })))
+       .addChoices(...ITEMS.filter(i => INVENTORY_ITEMS.includes(i.name)).map(i => ({ name: i.name, value: i.name })))
   )
   .addStringOption(opt =>
     opt.setName('action')
