@@ -338,14 +338,19 @@ client.on('interactionCreate', async interaction => {
 
     await setCount(customer.id, total);
 
-    // Assign correct tier role
+    // Assign correct tier role + always give Verified Customer
     const newTier = getTierForCount(total);
+    const verifiedRole = REWARDS.find(r => r.threshold === 1);
     if (member && newTier) {
       for (const reward of REWARDS) {
         const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
         if (role) {
-          if (reward.role === newTier.role) await member.roles.add(role).catch(() => {});
-          else await member.roles.remove(role).catch(() => {});
+          // Always keep Verified Customer role, plus assign top tier role
+          if (reward.role === newTier.role || reward.role === verifiedRole.role) {
+            await member.roles.add(role).catch(() => {});
+          } else {
+            await member.roles.remove(role).catch(() => {});
+          }
         }
       }
     }
