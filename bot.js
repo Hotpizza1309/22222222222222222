@@ -262,7 +262,7 @@ async function updateLeaderboardMessage(guild) {
       fields.push({
         name: `${medals[i]} #${i + 1}`,
         value: `<@${row.user_id}>\n${row.total} potions — ${tier ? tier.label : 'No tier yet'}`,
-        inline: true,
+        inline: false,
       });
     }
   }
