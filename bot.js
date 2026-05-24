@@ -3,7 +3,7 @@ const fs = require('fs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const ALLOWED_ROLES = ['Manager', 'Owner'];
-const LOG_ROLES = ['Head Manager', 'Owner'];
+const LOG_ROLES = ['Owner'];
 const LOG_CHANNEL   = 'person-log';
 const DATA_FILE     = './potion_data.json';
 
