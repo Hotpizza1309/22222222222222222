@@ -1,3 +1,4 @@
+
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -145,23 +146,52 @@ function buildInventoryText(rows) {
 
   const fmt = (item) => {
     const qty = map[item.name] ?? 0;
-    return `• ${item.name} — x${qty} — ${stockLabel(qty)}`;
+    const label = qty === 0 ? '🔴 OUT OF STOCK' : qty < LOW_STOCK_LIMIT ? '🟡 LOW STOCK' : '🟢 IN STOCK';
+    const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
+    return `  ╟─ ${item.name}\n  ║   ┣ Stock: **x${qty}** ${bar}\n  ║   ┗ ${label}`;
   };
 
-  return [
+  const totalQty = ITEMS.reduce((sum, item) => sum + (map[item.name] ?? 0), 0);
+  const lowItems = ITEMS.filter(i => (map[i.name] ?? 0) > 0 && (map[i.name] ?? 0) < LOW_STOCK_LIMIT);
+  const outItems = ITEMS.filter(i => (map[i.name] ?? 0) === 0);
+
+  const lines = [
+    '```ansi',
+    '╔══════════════════════════════════════╗',
+    '║   ⚗️  OFFICE OF EXPERIMENTAL ELIXIRS  ║',
+    '║         ~ Stock Manifest ~           ║',
+    '╚══════════════════════════════════════╝',
+    '',
+    '┌─────────────────────────────────────┐',
+    '│         ⚗️  ADVANCED POTIONS          │',
+    '└─────────────────────────────────────┘',
+    ...advanced.map(item => {
+      const qty = map[item.name] ?? 0;
+      const label = qty === 0 ? '[OUT OF STOCK]' : qty < LOW_STOCK_LIMIT ? '[LOW STOCK]' : '[IN STOCK]';
+      const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
+      return `  • ${item.name}\n    ┣ x${qty}  ${bar}  ${label}`;
+    }),
+    '',
+    '┌─────────────────────────────────────┐',
+    '│          🧪  REGULAR POTIONS          │',
+    '└─────────────────────────────────────┘',
+    ...regular.map(item => {
+      const qty = map[item.name] ?? 0;
+      const label = qty === 0 ? '[OUT OF STOCK]' : qty < LOW_STOCK_LIMIT ? '[LOW STOCK]' : '[IN STOCK]';
+      const bar = qty === 0 ? '░░░░░░░░░░' : qty < LOW_STOCK_LIMIT ? '███░░░░░░░' : '██████████';
+      return `  • ${item.name}\n    ┣ x${qty}  ${bar}  ${label}`;
+    }),
+    '',
+    '╔══════════════════════════════════════╗',
+    `║  📦 Total Potions in Stock: x${totalQty}`,
+    `║  🟡 Low Stock Items: ${lowItems.length}`,
+    `║  🔴 Out of Stock Items: ${outItems.length}`,
+    '╚══════════════════════════════════════╝',
     '```',
-    'OFFICE OF EXPERIMENTAL ELIXIRS',
-    '════════════════════',
-    '⚗️  ADVANCED POTIONS',
-    '════════════════════',
-    ...advanced.map(fmt),
-    '═══════════════════',
-    '🧪  REGULAR POTIONS',
-    '═══════════════════',
-    ...regular.map(fmt),
-    '```',
-    `*Last updated: <t:${Math.floor(Date.now() / 1000)}:R>*`,
-  ].join('\n');
+    `> 🕯️ *Last updated <t:${Math.floor(Date.now() / 1000)}:R> by the Potions Office*`,
+  ];
+
+  return lines.join('\n');
 }
 
 async function updateInventoryMessage(guild) {
