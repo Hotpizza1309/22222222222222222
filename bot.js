@@ -1,3 +1,4 @@
+
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -7,6 +8,7 @@ const LOG_ROLES       = ['Owner'];
 const LOG_CHANNEL     = 'person-log';
 const INV_CHANNEL     = '📰┋inventory-log';
 const LB_CHANNEL      = '🕯️┋rewards';
+const ORDER_CHANNEL   = '🧪📰┋order-log';
 const LOW_STOCK_LIMIT = 30;
 
 const REWARDS = [
@@ -504,6 +506,23 @@ client.on('interactionCreate', async interaction => {
         { name: 'New Total',     value: `${newCount}`,        inline: true },
         { name: 'Current Tier',  value: newTier ? newTier.label : 'None', inline: true },
       ).setTimestamp();
+    // Post to order log channel
+    const orderChannel = interaction.guild.channels.cache.find(c => c.name === ORDER_CHANNEL);
+    if (orderChannel) {
+      const orderEmbed = new EmbedBuilder()
+        .setTitle('🧪 Order Completed')
+        .setColor(0x5865F2)
+        .setThumbnail(customer.displayAvatarURL())
+        .addFields(
+          { name: 'Customer',     value: `<@${customer.id}>`,         inline: true },
+          { name: 'Potions',      value: `${potions}`,                 inline: true },
+          { name: 'Logged by',    value: `<@${interaction.user.id}>`,  inline: true },
+          { name: 'Order Details', value: note ? note : 'No details provided', inline: false },
+        )
+        .setTimestamp();
+      await orderChannel.send({ embeds: [orderEmbed] });
+    }
+
     if (tieredUp) replyEmbed.setDescription(`🎉 **${customer.username}** just ranked up to **${newTier.label}**!`);
     await updateLeaderboardMessage(interaction.guild);
     return interaction.reply({ embeds: [replyEmbed], ephemeral: false });
