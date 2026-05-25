@@ -1,4 +1,3 @@
-
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -332,7 +331,10 @@ const logCommand = new SlashCommandBuilder()
   .setDescription('Log potions purchased by a customer and update their rewards tier')
   .addUserOption(opt => opt.setName('customer').setDescription('The customer to log for').setRequired(true))
   .addIntegerOption(opt => opt.setName('potions').setDescription('Number of potions purchased').setMinValue(1).setRequired(true))
-  .addStringOption(opt => opt.setName('note').setDescription('Optional note (e.g. order details)').setRequired(false));
+  .addStringOption(opt => opt.setName('potions_ordered').setDescription('What was ordered (e.g. Animagus x1, Healing x3)').setRequired(false))
+  .addStringOption(opt => opt.setName('price').setDescription('Total price in Galleons (e.g. 28 Galleons)').setRequired(false))
+  .addStringOption(opt => opt.setName('image').setDescription('Paste an image URL as proof of delivery').setRequired(false))
+  .addStringOption(opt => opt.setName('note').setDescription('Any extra notes').setRequired(false));
 
 const checkCommand = new SlashCommandBuilder()
   .setName('checkpotions')
@@ -459,10 +461,13 @@ client.on('interactionCreate', async interaction => {
   // ── /logpurchase ────────────────────────────────────────────────────────────
   if (interaction.commandName === 'logpurchase') {
     if (!hasLogRole(interaction.member)) return interaction.reply({ content: '❌ Only **Owner** can log purchases.', ephemeral: true });
-    const customer = interaction.options.getUser('customer');
-    const potions  = interaction.options.getInteger('potions');
-    const note     = interaction.options.getString('note') ?? null;
-    const member   = await interaction.guild.members.fetch(customer.id).catch(() => null);
+    const customer       = interaction.options.getUser('customer');
+    const potions        = interaction.options.getInteger('potions');
+    const potionsOrdered = interaction.options.getString('potions_ordered') ?? null;
+    const price          = interaction.options.getString('price') ?? null;
+    const image          = interaction.options.getString('image') ?? null;
+    const note           = interaction.options.getString('note') ?? null;
+    const member         = await interaction.guild.members.fetch(customer.id).catch(() => null);
     if (!member) return interaction.reply({ content: '❌ Could not find that user in this server.', ephemeral: true });
     const prevCount = await getCount(customer.id);
     const newCount  = prevCount + potions;
@@ -514,12 +519,15 @@ client.on('interactionCreate', async interaction => {
         .setColor(0x5865F2)
         .setThumbnail(customer.displayAvatarURL())
         .addFields(
-          { name: 'Customer',     value: `<@${customer.id}>`,         inline: true },
-          { name: 'Potions',      value: `${potions}`,                 inline: true },
-          { name: 'Logged by',    value: `<@${interaction.user.id}>`,  inline: true },
-          { name: 'Order Details', value: note ? note : 'No details provided', inline: false },
+          { name: 'Customer',        value: `<@${customer.id}>`,        inline: true },
+          { name: 'Qty Purchased',   value: `${potions}`,                inline: true },
+          { name: 'Logged by',       value: `<@${interaction.user.id}>`, inline: true },
+          { name: 'Potions Ordered', value: potionsOrdered ?? 'Not specified', inline: false },
+          { name: '💰 Price',        value: price ?? 'Not specified',    inline: true },
+          { name: '📝 Note',         value: note ?? 'None',              inline: true },
         )
         .setTimestamp();
+      if (image) orderEmbed.setImage(image);
       await orderChannel.send({ embeds: [orderEmbed] });
     }
 
