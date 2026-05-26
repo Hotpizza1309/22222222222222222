@@ -255,22 +255,28 @@ async function updateLeaderboardMessage(guild) {
 
   const topRoles = ['🥇 First Place', '🥈 Second Place', '🥉 Third Place'];
 
-  // Remove all top 3 roles from everyone who has them
-  for (const roleName of topRoles) {
-    const role = guild.roles.cache.find(r => r.name === roleName);
-    if (!role) continue;
-    const members = role.members;
-    for (const [, member] of members) {
-      await member.roles.remove(role).catch(() => {});
-    }
-  }
-
-  // Assign new top 3 roles
-  for (let i = 0; i < Math.min(3, top10.length); i++) {
+  // Smart role assignment - only add/remove if something changed
+  for (let i = 0; i < topRoles.length; i++) {
     const role = guild.roles.cache.find(r => r.name === topRoles[i]);
     if (!role) continue;
-    const member = await guild.members.fetch(top10[i].user_id).catch(() => null);
-    if (member) await member.roles.add(role).catch(() => {});
+
+    const correctUserId = top10[i]?.user_id ?? null;
+    const currentHolders = role.members;
+
+    // Remove from anyone who shouldn't have it
+    for (const [, member] of currentHolders) {
+      if (member.id !== correctUserId) {
+        await member.roles.remove(role).catch(() => {});
+      }
+    }
+
+    // Add to correct person if they don't already have it
+    if (correctUserId) {
+      const correctMember = await guild.members.fetch(correctUserId).catch(() => null);
+      if (correctMember && !correctMember.roles.cache.has(role.id)) {
+        await correctMember.roles.add(role).catch(() => {});
+      }
+    }
   }
 
   const fields = [];
@@ -324,7 +330,7 @@ ITEMS.forEach(item => {
   );
 });
 orderCommand.addBooleanOption(opt => opt.setName('discount').setDescription('Apply 15% loyalty discount?').setRequired(false));
-orderCommand.addBooleanOption(opt => opt.setName('clearance_sale').setDescription('Apply 25% clearance sale discount?').setRequired(false));
+orderCommand.addBooleanOption(opt => opt.setName('tuo_sale').setDescription('Apply 20% TUO Sale discount?').setRequired(false));
 
 const logCommand = new SlashCommandBuilder()
   .setName('logpurchase')
@@ -430,7 +436,7 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({ content: '❌ Only **Manager** and **Owner** roles can use this command.', ephemeral: true });
     }
     const applyDiscount  = interaction.options.getBoolean('discount') ?? false;
-    const applyClearance = interaction.options.getBoolean('clearance_sale') ?? false;
+    const applyClearance = interaction.options.getBoolean('tuo_sale') ?? false;
     const lineItems = [];
     let subtotal = 0;
     ITEMS.forEach(item => {
@@ -440,13 +446,13 @@ client.on('interactionCreate', async interaction => {
     });
     if (lineItems.length === 0) return interaction.reply({ content: '⚠️ No items selected!', ephemeral: true });
     let discountPct = 0, discountLabel = '';
-    if (applyDiscount && applyClearance) { discountPct = 0.25; discountLabel = '25% clearance sale (best discount applied)'; }
-    else if (applyClearance)             { discountPct = 0.25; discountLabel = '25% clearance sale'; }
+    if (applyDiscount && applyClearance) { discountPct = 0.20; discountLabel = '20% TUO Sale (best discount applied)'; }
+    else if (applyClearance)             { discountPct = 0.20; discountLabel = '20% TUO Sale'; }
     else if (applyDiscount)              { discountPct = 0.15; discountLabel = '15% loyalty discount'; }
     const discountAmt = Math.round(subtotal * discountPct * 100) / 100;
     const total = subtotal - discountAmt;
     const embed = new EmbedBuilder()
-      .setTitle('🧪 Potion Order Summary').setColor(applyClearance ? 0xF1C40F : 0x5865F2)
+      .setTitle('🧪 Potion Order Summary').setColor(applyClearance ? 0xFF6B00 : 0x5865F2)
       .addFields(lineItems.map(l => ({ name: l.name, value: `× ${l.qty} — **${l.cost} Galleons**`, inline: true })))
       .addFields({ name: '\u200b', value: '─────────────────', inline: false });
     if (discountPct > 0) embed.addFields(
