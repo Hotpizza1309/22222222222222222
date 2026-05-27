@@ -347,6 +347,13 @@ const checkCommand = new SlashCommandBuilder()
   .setDescription('Check how many potions a customer has purchased')
   .addUserOption(opt => opt.setName('customer').setDescription('The customer to check').setRequired(true));
 
+const removeCommand = new SlashCommandBuilder()
+  .setName('removepotions')
+  .setDescription('Remove potions from a customer and update their tier')
+  .addUserOption(opt => opt.setName('customer').setDescription('The customer to remove potions from').setRequired(true))
+  .addIntegerOption(opt => opt.setName('potions').setDescription('Number of potions to remove').setMinValue(1).setRequired(true))
+  .addStringOption(opt => opt.setName('reason').setDescription('Reason for removal').setRequired(false));
+
 const leaderboardCommand = new SlashCommandBuilder()
   .setName('leaderboard')
   .setDescription('Show the top 5 customers with the most potions purchased');
@@ -402,6 +409,7 @@ async function registerCommands(clientId, token) {
         helpCommand.toJSON(),
         restoreCommand.toJSON(),
         updateInvCommand.toJSON(),
+        removeCommand.toJSON(),
       ]
     });
     console.log('Slash commands registered.');
@@ -640,6 +648,85 @@ client.on('interactionCreate', async interaction => {
     });
   }
 
+  // ── /removepotions ─────────────────────────────────────────────────────────
+  if (interaction.commandName === 'removepotions') {
+    if (!hasLogRole(interaction.member)) {
+      return interaction.reply({ content: '❌ Only **Owner** can remove potions.', ephemeral: true });
+    }
+
+    const customer = interaction.options.getUser('customer');
+    const potions  = interaction.options.getInteger('potions');
+    const reason   = interaction.options.getString('reason') ?? null;
+    const member   = await interaction.guild.members.fetch(customer.id).catch(() => null);
+
+    const prevCount = await getCount(customer.id);
+    const newCount  = Math.max(0, prevCount - potions);
+    await setCount(customer.id, newCount);
+
+    const prevTier = getTierForCount(prevCount);
+    const newTier  = getTierForCount(newCount);
+    const tieredDown = prevTier && newTier?.threshold !== prevTier?.threshold;
+
+    // Update roles if tier changed
+    if (tieredDown && member) {
+      const verifiedRole = REWARDS.find(r => r.threshold === 1);
+      for (const reward of REWARDS) {
+        const role = interaction.guild.roles.cache.find(r => r.name === reward.role);
+        if (role) {
+          if (newTier && (reward.role === newTier.role || reward.role === verifiedRole.role)) {
+            await member.roles.add(role).catch(() => {});
+          } else if (!newTier && reward.role === verifiedRole.role && newCount === 0) {
+            await member.roles.remove(role).catch(() => {});
+          } else {
+            await member.roles.remove(role).catch(() => {});
+          }
+        }
+      }
+    }
+
+    const nextTier = REWARDS.slice().reverse().find(r => r.threshold > newCount) ?? null;
+    const nextTierText = nextTier ? `\${nextTier.threshold - newCount} more potions until **\${nextTier.label}**` : '🏆 Max tier reached!';
+
+    // Post to person-log
+    const logChannel = interaction.guild.channels.cache.find(c => c.name === LOG_CHANNEL);
+    if (logChannel) {
+      const logEmbed = new EmbedBuilder()
+        .setTitle('📋 Potions Removed')
+        .setColor(0xED4245)
+        .setThumbnail(customer.displayAvatarURL())
+        .addFields(
+          { name: 'Customer',        value: `<@\${customer.id}>`,         inline: true },
+          { name: 'Potions Removed', value: `-\${potions}`,               inline: true },
+          { name: 'New Total',       value: `\${newCount}`,                inline: true },
+          { name: 'Previous Tier',   value: prevTier ? prevTier.label : 'None', inline: true },
+          { name: 'Current Tier',    value: newTier ? newTier.label : 'None',   inline: true },
+          { name: 'Removed by',      value: `<@\${interaction.user.id}>`,  inline: true },
+        );
+      if (reason) logEmbed.addFields({ name: '📝 Reason', value: reason, inline: false });
+      if (tieredDown) logEmbed.addFields({ name: '📉 Tier Down', value: `\${customer.username} dropped from **\${prevTier.label}** to **\${newTier ? newTier.label : 'None'}**`, inline: false });
+      logEmbed.setTimestamp();
+      await logChannel.send({ embeds: [logEmbed] });
+    }
+
+    // Update leaderboard
+    await updateLeaderboardMessage(interaction.guild);
+
+    const replyEmbed = new EmbedBuilder()
+      .setTitle('✅ Potions Removed')
+      .setColor(0xED4245)
+      .addFields(
+        { name: 'Customer',        value: `<@\${customer.id}>`, inline: true },
+        { name: 'Potions Removed', value: `-\${potions}`,       inline: true },
+        { name: 'New Total',       value: `\${newCount}`,        inline: true },
+        { name: 'Current Tier',    value: newTier ? newTier.label : 'None', inline: true },
+        { name: 'Next Tier',       value: nextTierText,           inline: false },
+      )
+      .setTimestamp();
+
+    if (tieredDown) replyEmbed.setDescription(`📉 **\${customer.username}** dropped from **\${prevTier.label}** to **\${newTier ? newTier.label : 'None'}**`);
+    return interaction.reply({ embeds: [replyEmbed], ephemeral: true });
+  }
+
   // ── /help ───────────────────────────────────────────────────────────────────
   if (interaction.commandName === 'help') {
     const embed = new EmbedBuilder().setTitle('🧙 Potion Shop Bot — Commands').setColor(0x5865F2)
@@ -650,6 +737,7 @@ client.on('interactionCreate', async interaction => {
         { name: '🔒 `/checkpotions`',      value: 'Check a customer\'s total potion count, current tier, and progress to the next tier.', inline: false },
         { name: '🏆 `/leaderboard`',       value: 'Shows the top 5 customers with the most potions purchased.', inline: false },
         { name: '👑 `/restorelog`',        value: 'Restore a customer\'s potion total from old logs.', inline: false },
+        { name: '👑 `/removepotions`',     value: 'Remove potions from a customer\'s total. Updates their tier, posts to `#person-log`, and refreshes the leaderboard.', inline: false },
         { name: '👑 `/updateinventory`',   value: 'Update stock quantities for any potion. Automatically refreshes the inventory message in `#📰┋inventory-log`.', inline: false },
         { name: '❓ `/help`',              value: 'Shows this help message.', inline: false },
         { name: '\u200b',                  value: '**Rewards Tiers**', inline: false },
