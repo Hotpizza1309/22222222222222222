@@ -685,7 +685,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     const nextTier = REWARDS.slice().reverse().find(r => r.threshold > newCount) ?? null;
-    const nextTierText = nextTier ? `\${nextTier.threshold - newCount} more potions until **\${nextTier.label}**` : '🏆 Max tier reached!';
+    const nextTierText = nextTier ? `${nextTier.threshold - newCount} more potions until **${nextTier.label}**` : '🏆 Max tier reached!';
 
     // Post to person-log
     const logChannel = interaction.guild.channels.cache.find(c => c.name === LOG_CHANNEL);
@@ -695,15 +695,15 @@ client.on('interactionCreate', async interaction => {
         .setColor(0xED4245)
         .setThumbnail(customer.displayAvatarURL())
         .addFields(
-          { name: 'Customer',        value: `<@\${customer.id}>`,         inline: true },
-          { name: 'Potions Removed', value: `-\${potions}`,               inline: true },
-          { name: 'New Total',       value: `\${newCount}`,                inline: true },
+          { name: 'Customer',        value: `<@${customer.id}>`,         inline: true },
+          { name: 'Potions Removed', value: `-${potions}`,               inline: true },
+          { name: 'New Total',       value: `${newCount}`,                inline: true },
           { name: 'Previous Tier',   value: prevTier ? prevTier.label : 'None', inline: true },
           { name: 'Current Tier',    value: newTier ? newTier.label : 'None',   inline: true },
-          { name: 'Removed by',      value: `<@\${interaction.user.id}>`,  inline: true },
+          { name: 'Removed by',      value: `<@${interaction.user.id}>`,  inline: true },
         );
       if (reason) logEmbed.addFields({ name: '📝 Reason', value: reason, inline: false });
-      if (tieredDown) logEmbed.addFields({ name: '📉 Tier Down', value: `\${customer.username} dropped from **\${prevTier.label}** to **\${newTier ? newTier.label : 'None'}**`, inline: false });
+      if (tieredDown) logEmbed.addFields({ name: '📉 Tier Down', value: `${customer.username} dropped from **${prevTier.label}** to **${newTier ? newTier.label : 'None'}**`, inline: false });
       logEmbed.setTimestamp();
       await logChannel.send({ embeds: [logEmbed] });
     }
@@ -715,15 +715,15 @@ client.on('interactionCreate', async interaction => {
       .setTitle('✅ Potions Removed')
       .setColor(0xED4245)
       .addFields(
-        { name: 'Customer',        value: `<@\${customer.id}>`, inline: true },
-        { name: 'Potions Removed', value: `-\${potions}`,       inline: true },
-        { name: 'New Total',       value: `\${newCount}`,        inline: true },
+        { name: 'Customer',        value: `<@${customer.id}>`, inline: true },
+        { name: 'Potions Removed', value: `-${potions}`,       inline: true },
+        { name: 'New Total',       value: `${newCount}`,        inline: true },
         { name: 'Current Tier',    value: newTier ? newTier.label : 'None', inline: true },
         { name: 'Next Tier',       value: nextTierText,           inline: false },
       )
       .setTimestamp();
 
-    if (tieredDown) replyEmbed.setDescription(`📉 **\${customer.username}** dropped from **\${prevTier.label}** to **\${newTier ? newTier.label : 'None'}**`);
+    if (tieredDown) replyEmbed.setDescription(`📉 **${customer.username}** dropped from **${prevTier.label}** to **${newTier ? newTier.label : 'None'}**`);
     return interaction.reply({ embeds: [replyEmbed], ephemeral: true });
   }
 
