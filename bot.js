@@ -454,8 +454,8 @@ client.on('interactionCreate', async interaction => {
     });
     if (lineItems.length === 0) return interaction.reply({ content: '⚠️ No items selected!', ephemeral: true });
     let discountPct = 0, discountLabel = '';
-    if (applyDiscount && applyClearance) { discountPct = 0.20; discountLabel = '20% TUO Sale (best discount applied)'; }
-    else if (applyClearance)             { discountPct = 0.20; discountLabel = '20% TUO Sale'; }
+    if (applyDiscount && applyClearance) { discountPct = 0.25; discountLabel = '25% TUO Sale (best discount applied)'; }
+    else if (applyClearance)             { discountPct = 0.25; discountLabel = '25% TUO Sale'; }
     else if (applyDiscount)              { discountPct = 0.15; discountLabel = '15% loyalty discount'; }
     const discountAmt = Math.round(subtotal * discountPct * 100) / 100;
     const total = subtotal - discountAmt;
