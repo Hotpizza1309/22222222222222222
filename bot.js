@@ -162,9 +162,10 @@ function getTierForCount(count) {
   return REWARDS.find(r => count >= r.threshold) ?? null;
 }
 
-function stockLabel(qty) {
-  if (qty === 0)              return '🔴 {Out of Stock}';
-  if (qty < LOW_STOCK_LIMIT)  return '🟡 {Low Stock}';
+function stockLabel(qty, itemName) {
+  const limit = itemName === "Snape's Advanced Potion Book" ? 3 : LOW_STOCK_LIMIT;
+  if (qty === 0)    return '🔴 {Out of Stock}';
+  if (qty < limit)  return '🟡 {Low Stock}';
   return '🟢 {In Stock}';
 }
 
@@ -185,8 +186,9 @@ function buildInventoryText(rows) {
 
   const fmt = (item) => {
     const qty   = map[item.name] ?? 0;
-    const emoji = qty === 0 ? '🔴' : qty < LOW_STOCK_LIMIT ? '🟡' : '🟢';
-    const label = qty === 0 ? '{Out of Stock}' : qty < LOW_STOCK_LIMIT ? '{Low Stock}' : '{In Stock}';
+    const full  = stockLabel(qty, item.name);
+    const emoji = full.split(' ')[0];
+    const label = full.split(' ').slice(1).join(' ');
     return `    ${emoji} ${pad(item.name, maxLen)} x${qty}  ${label}`;
   };
 
@@ -330,7 +332,7 @@ ITEMS.forEach(item => {
   );
 });
 orderCommand.addBooleanOption(opt => opt.setName('discount').setDescription('Apply 15% loyalty discount?').setRequired(false));
-orderCommand.addBooleanOption(opt => opt.setName('tuo_sale').setDescription('Apply 20% TUO Sale discount?').setRequired(false));
+orderCommand.addBooleanOption(opt => opt.setName('tuo_sale').setDescription('Apply 25% TUO Sale discount?').setRequired(false));
 
 const logCommand = new SlashCommandBuilder()
   .setName('logpurchase')
